@@ -79,6 +79,121 @@ from inference import (
     calculate_padding,
     load_media_file,
 )
+from ltx_video.pipelines.pipeline_ltx_video import LTXVideoPipeline, ConditioningItem
+from ltx_video.models.autoencoders.latent_upsampler import LatentUpsampler
+from ltx_video.utils.skip_layer_strategy import SkipLayerStrategy
+from ltx_video.models.autoencoders.vae_encode import (
+    un_normalize_latents,
+    normalize_latents,
+)
+
+
+def adain_filter_latent(
+    latents: torch.Tensor, reference_latents: torch.Tensor, factor=1.0
+):
+    """
+    Applies Adaptive Instance Normalization (AdaIN) to a latent tensor based on
+    statistics from a reference latent tensor.
+
+    Args:
+        latent (torch.Tensor): Input latents to normalize
+        reference_latent (torch.Tensor): The reference latents providing style statistics.
+        factor (float): Blending factor between original and transformed latent.
+                       Range: -10.0 to 10.0, Default: 1.0
+
+    Returns:
+        torch.Tensor: The transformed latent tensor
+    """
+    result = latents.clone()
+
+    for i in range(latents.size(0)):
+        for c in range(latents.size(1)):
+            r_sd, r_mean = torch.std_mean(
+                reference_latents[i, c], dim=None
+            )  # index by original dim order
+            i_sd, i_mean = torch.std_mean(result[i, c], dim=None)
+
+            result[i, c] = ((result[i, c] - i_mean) / i_sd) * r_sd + r_mean
+
+    result = torch.lerp(latents, result, factor)
+    return result
+
+
+class CorrectedLTXMultiScalePipeline:
+    def _upsample_latents(
+        self, latest_upsampler: LatentUpsampler, latents: torch.Tensor
+    ):
+        assert latents.device == latest_upsampler.device
+
+        latents = un_normalize_latents(
+            latents, self.vae, vae_per_channel_normalize=True
+        )
+        upsampled_latents = latest_upsampler(latents)
+        upsampled_latents = normalize_latents(
+            upsampled_latents, self.vae, vae_per_channel_normalize=True
+        )
+        return upsampled_latents
+
+    def __init__(
+        self, video_pipeline: LTXVideoPipeline, latent_upsampler: LatentUpsampler
+    ):
+        self.video_pipeline = video_pipeline
+        self.vae = video_pipeline.vae
+        self.latent_upsampler = latent_upsampler
+
+    def __call__(
+        self,
+        downscale_factor: float,
+        first_pass: dict,
+        second_pass: dict,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        original_kwargs = kwargs.copy()
+        original_output_type = kwargs["output_type"]
+        original_width = kwargs["width"]
+        original_height = kwargs["height"]
+
+        x_width = int(kwargs["width"] * downscale_factor)
+        downscaled_width = x_width - (x_width % self.video_pipeline.vae_scale_factor)
+        x_height = int(kwargs["height"] * downscale_factor)
+        downscaled_height = x_height - (x_height % self.video_pipeline.vae_scale_factor)
+
+        kwargs["output_type"] = "latent"
+        kwargs["width"] = downscaled_width
+        kwargs["height"] = downscaled_height
+        kwargs.update(**first_pass)
+        result = self.video_pipeline(*args, **kwargs)
+        latents = result.images
+
+        upsampled_latents = self._upsample_latents(self.latent_upsampler, latents)
+        upsampled_latents = adain_filter_latent(
+            latents=upsampled_latents, reference_latents=latents
+        )
+
+        kwargs = original_kwargs
+
+        kwargs["latents"] = upsampled_latents
+        kwargs["output_type"] = original_output_type
+        kwargs["width"] = downscaled_width * 2
+        kwargs["height"] = downscaled_height * 2
+        kwargs.update(**second_pass)
+
+        result = self.video_pipeline(*args, **kwargs)
+        if original_output_type != "latent":
+            num_frames = result.images.shape[2]
+            videos = rearrange(result.images, "b c f h w -> (b f) c h w")
+
+            videos = F.interpolate(
+                videos,
+                size=(original_height, original_width),
+                mode="bilinear",
+                align_corners=False,
+            )
+            videos = rearrange(videos, "(b f) c h w -> b c f h w", f=num_frames)
+            result.images = videos
+
+        return result
 # All other custom classes and functions will be defined at the end of the file.
 
 config_file_path = "configs/ltxv-13b-0.9.8-distilled.yaml"
@@ -89,10 +204,6 @@ LTX_REPO = "Lightricks/LTX-Video"
 MAX_IMAGE_SIZE = PIPELINE_CONFIG_YAML.get("max_resolution", 1280)
 MAX_NUM_FRAMES = 900
 N_LATENT_OVERLAP_FRAMES = 2
-
-# Forward-declare the corrected pipeline class we will define later
-class CorrectedLTXMultiScalePipeline:
-    pass
 
 pipeline_instance = None
 latent_upsampler_instance = None
