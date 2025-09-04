@@ -105,7 +105,7 @@ SPATIAL_UPSCALER_FILENAME = PIPELINE_CONFIG_YAML["spatial_upscaler_model_path"]
 spatial_upscaler_actual_path = hf_hub_download(repo_id=LTX_REPO, filename=SPATIAL_UPSCALER_FILENAME, local_dir=models_dir, local_dir_use_symlinks=False)
 PIPELINE_CONFIG_YAML["spatial_upscaler_model_path"] = spatial_upscaler_actual_path
 print("Creating LTX Video pipeline on CPU...")
-pipeline_instance = create_ltx_video_pipeline(ckpt_path=PIPELINE_CONFIG_YAML["checkpoint_path"], precision=PIPELINE_CONFIG_YAML["precision"], text_encoder_model_name_or_path=PIPELINE_CONFIG_YAML["text_encoder_model_name_or_path"], sampler=PIPELINE_CONFIG_YAML["sampler"], device="cpu", enhance_prompt=False, prompt_enhancer_image_caption_model_name_or_path=PIPELINE_CONFIG_YAML["prompt_enhancer_image_caption_model_name_or_path"], prompt_enhancer_llm_model_name_or_path=PIPELINE_CONFIG_YAML["prompt_enhancer_llm_model_name_or_path"])
+pipeline_instance = create_ltx_video_pipeline(ckpt_path=PIPELINE_CONFIG_YAML["checkpoint_path"], precision=PIPELINE_CONFIG_YAML["precision"], text_encoder_model_name_or_path=PIPELINE_CONFIG_YAML["text_encoder_model_name_or_path"], sampler=PIPELINE_CONFIG_YAML["sampler"], device="cpu", enhance_prompt=True, prompt_enhancer_image_caption_model_name_or_path=PIPELINE_CONFIG_YAML["prompt_enhancer_image_caption_model_name_or_path"], prompt_enhancer_llm_model_name_or_path=PIPELINE_CONFIG_YAML["prompt_enhancer_llm_model_name_or_path"])
 if PIPELINE_CONFIG_YAML.get("spatial_upscaler_model_path"):
     print("Creating latent upsampler on CPU...")
     latent_upsampler_instance = create_latent_upsampler(PIPELINE_CONFIG_YAML["spatial_upscaler_model_path"], device="cpu")
@@ -113,6 +113,17 @@ target_inference_device = "cuda"
 print(f"Target inference device: {target_inference_device}")
 pipeline_instance.to(target_inference_device)
 if latent_upsampler_instance: latent_upsampler_instance.to(target_inference_device)
+
+print("Compiling models with torch.compile...")
+try:
+    pipeline_instance.transformer = torch.compile(pipeline_instance.transformer, mode="reduce-overhead", fullgraph=True)
+    pipeline_instance.vae = torch.compile(pipeline_instance.vae, mode="reduce-overhead", fullgraph=True)
+    print("Models compiled successfully.")
+except Exception as e:
+    print(f"Could not compile models: {e}")
+
+generator_torch = torch.Generator(device=target_inference_device)
+enhancer_generator = torch.Generator(device='cuda')
 
 
 def calculate_new_dimensions(orig_w, orig_h):
@@ -141,10 +152,10 @@ def enhance_frame(image_to_enhance: Image.Image, refine_prompt: str, refine_stre
     try:
         print("Moving enhancer pipeline to GPU...")
         seed = random.randint(0, MAX_SEED)
-        generator = torch.Generator(device='cuda').manual_seed(seed)
+        enhancer_generator.manual_seed(seed)
         enhancer_pipeline.to("cuda",torch.bfloat16)
         print(f"Refining frame with prompt: '{refine_prompt}', strength: {refine_strength}, steps: {refine_steps}")
-        enhanced_image = enhancer_pipeline(prompt=refine_prompt, image=image_to_enhance, strength=refine_strength, generator=generator, num_inference_steps=refine_steps).images[0]
+        enhanced_image = enhancer_pipeline(prompt=refine_prompt, image=image_to_enhance, strength=refine_strength, generator=enhancer_generator, num_inference_steps=refine_steps).images[0]
         print("Frame enhancement successful.")
     except Exception as e:
         print(f"Error during frame enhancement: {e}")
@@ -274,7 +285,7 @@ def generate(prompt, negative_prompt, clips_list, previous_latent_path, continue
     actual_num_frames = max(9, min(MAX_NUM_FRAMES, int(round((max(1, round(duration_ui * fps)) - 1.0) / 8.0) * 8 + 1)))
     padding_values = calculate_padding(actual_height, actual_width, height_padded, width_padded)
     num_frames_padded = max(9, ((actual_num_frames - 2) // 8 + 1) * 8 + 1)
-    generator_torch = torch.Generator(device=target_inference_device).manual_seed(int(seed_ui))
+    generator_torch.manual_seed(int(seed_ui))
     
     call_kwargs = {
         "prompt": prompt, "negative_prompt": negative_prompt, "height": height_padded,
