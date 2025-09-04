@@ -85,7 +85,6 @@ from ltx_video.utils.skip_layer_strategy import SkipLayerStrategy
 from ltx_video.models.autoencoders.vae_encode import (
     un_normalize_latents,
     normalize_latents,
-    vae_decode,
 )
 
 
@@ -143,7 +142,7 @@ class CorrectedLTXMultiScalePipeline:
         self.latent_upsampler = latent_upsampler
 
     def __call__(
-    self,
+        self,
         downscale_factor: float,
         first_pass: dict,
         second_pass: dict,
@@ -154,22 +153,17 @@ class CorrectedLTXMultiScalePipeline:
         original_output_type = kwargs["output_type"]
         original_width = kwargs["width"]
         original_height = kwargs["height"]
-    
+
         x_width = int(kwargs["width"] * downscale_factor)
         downscaled_width = x_width - (x_width % self.video_pipeline.vae_scale_factor)
         x_height = int(kwargs["height"] * downscale_factor)
         downscaled_height = x_height - (x_height % self.video_pipeline.vae_scale_factor)
 
-    # First pass
-        first_pass_kwargs = {**first_pass, **kwargs}
-        if first_pass_kwargs.get("skip_initial_inference_steps", 0) > 0 and "timesteps" in first_pass_kwargs:
-            del first_pass_kwargs["timesteps"]
-
-        first_pass_kwargs["output_type"] = "latent"
-        first_pass_kwargs["width"] = downscaled_width
-        first_pass_kwargs["height"] = downscaled_height
-        
-        result = self.video_pipeline(*args, **first_pass_kwargs)
+        kwargs["output_type"] = "latent"
+        kwargs["width"] = downscaled_width
+        kwargs["height"] = downscaled_height
+        kwargs.update(**first_pass)
+        result = self.video_pipeline(*args, **kwargs)
         latents = result.images
 
         upsampled_latents = self._upsample_latents(self.latent_upsampler, latents)
@@ -177,14 +171,15 @@ class CorrectedLTXMultiScalePipeline:
             latents=upsampled_latents, reference_latents=latents
         )
 
-    # Second pass
-        second_pass_kwargs = {**second_pass, **original_kwargs}
-        second_pass_kwargs["latents"] = upsampled_latents
-        second_pass_kwargs["output_type"] = original_output_type
-        second_pass_kwargs["width"] = downscaled_width * 2
-        second_pass_kwargs["height"] = downscaled_height * 2
+        kwargs = original_kwargs
 
-        result = self.video_pipeline(*args, **second_pass_kwargs)
+        kwargs["latents"] = upsampled_latents
+        kwargs["output_type"] = original_output_type
+        kwargs["width"] = downscaled_width * 2
+        kwargs["height"] = downscaled_height * 2
+        kwargs.update(**second_pass)
+
+        result = self.video_pipeline(*args, **kwargs)
         if original_output_type != "latent":
             num_frames = result.images.shape[2]
             videos = rearrange(result.images, "b c f h w -> (b f) c h w")
@@ -198,7 +193,7 @@ class CorrectedLTXMultiScalePipeline:
             videos = rearrange(videos, "(b f) c h w -> b c f h w", f=num_frames)
             result.images = videos
 
-    return result
+        return result
 # All other custom classes and functions will be defined at the end of the file.
 
 config_file_path = "configs/ltxv-13b-0.9.8-distilled.yaml"
