@@ -26,4 +26,4 @@ second_pass:
   stg_scale: 0
   rescaling_scale: 1
   skip_block_list: [42]
-  tone_map_compression_ratio: 0.6
+  tone_map_compression_ratio: 0.0
