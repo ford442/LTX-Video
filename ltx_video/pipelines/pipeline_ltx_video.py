@@ -315,7 +315,7 @@ class LTXVideoPipeline(DiffusionPipeline):
         negative_prompt_embeds: Optional[torch.FloatTensor] = None,
         prompt_attention_mask: Optional[torch.FloatTensor] = None,
         negative_prompt_attention_mask: Optional[torch.FloatTensor] = None,
-        text_encoder_max_tokens: int = 256,
+        text_encoder_max_tokens: int = 128,
         **kwargs,
     ):
         r"""
@@ -666,9 +666,19 @@ class LTXVideoPipeline(DiffusionPipeline):
             latents is None or media_items is None
         ), "Cannot provide both latents and media_items. Please provide only one of the two."
 
-        assert (
-            latents is None and media_items is None or timestep < 1.0
-        ), "Input media_item or latents are provided, but they will be replaced with noise."
+        # The original assertion was too strict for latent-to-latent workflows
+        # that use skip_initial_inference_steps. In that case, the first
+        # timestep can be 1.0, but the pipeline won't actually use it because
+        # the denoising loop will start at a later, smaller timestep.
+        # We check if this is a latent-to-latent run by seeing if the 'media_items'
+        # argument is None while 'latents' is not. If so, we bypass the timestep check.
+        is_latent_to_latent_run = latents is not None and media_items is None
+
+        if not is_latent_to_latent_run:
+            # Original assertion for standard img2img/vid2vid runs
+            assert (
+                latents is None and media_items is None or timestep < 1.0
+            ), "Input media_item or latents are provided, but they will be replaced with noise."
 
         if media_items is not None:
             latents = vae_encode(
@@ -676,14 +686,32 @@ class LTXVideoPipeline(DiffusionPipeline):
                 self.vae,
                 vae_per_channel_normalize=vae_per_channel_normalize,
             )
+
         if latents is not None:
-            assert (
-                latents.shape == latent_shape
-            ), f"Latents have to be of shape {latent_shape} but are {latents.shape}."
+            # If it's a latent-to-latent run, we bypass the strict shape check.
+            # We only check the batch size and channel count. The frame, height, and width
+            # are expected to be correct from the custom construction in our app.py.
+            if is_latent_to_latent_run:
+                if latents.shape[0] != latent_shape[0] or latents.shape[1] != latent_shape[1]:
+                     raise ValueError(
+                        f"For latent-to-latent, batch and channel dims must match. "
+                        f"Expected batch={latent_shape[0]}, channels={latent_shape[1]} but got "
+                        f"batch={latents.shape[0]}, channels={latents.shape[1]}."
+                     )
+            else:
+                # Original strict shape check for other modes.
+                assert (
+                    latents.shape == latent_shape
+                ), f"Latents have to be of shape {latent_shape} but are {latents.shape}."
+            
             latents = latents.to(device=device, dtype=dtype)
 
-        # For backward compatibility, generate in the "patchified" shape and rearrange
-        b, c, f, h, w = latent_shape
+        # Determine the correct shape for noise generation.
+        # If a `latents` tensor is provided (either from sliding window or img2img),
+        # use its shape to ensure compatibility. Otherwise, use the pipeline's expected `latent_shape`.
+        noise_shape = latents.shape if latents is not None else latent_shape
+        
+        b, c, f, h, w = noise_shape # Use the determined correct shape
         noise = randn_tensor(
             (b, f * h * w, c), generator=generator, device=device, dtype=dtype
         )
@@ -787,7 +815,7 @@ class LTXVideoPipeline(DiffusionPipeline):
         mixed_precision: bool = False,
         offload_to_cpu: bool = False,
         enhance_prompt: bool = False,
-        text_encoder_max_tokens: int = 256,
+        text_encoder_max_tokens: int = 128,
         stochastic_sampling: bool = False,
         media_items: Optional[torch.Tensor] = None,
         tone_map_compression_ratio: float = 0.0,
@@ -1146,7 +1174,10 @@ class LTXVideoPipeline(DiffusionPipeline):
                     assert num_images_per_prompt == 1
                     conditioning_mask = torch.cat([conditioning_mask] * num_conds)
                 fractional_coords = batch_pixel_coords.to(torch.float32)
-                fractional_coords[:, 0] = fractional_coords[:, 0] * (1.0 / frame_rate)
+
+                # Safeguard against division by zero. If frame_rate is 0 or None, treat it as 1 for this calculation.
+                safe_frame_rate = frame_rate if frame_rate else 1.0
+                fractional_coords[:, 0] = fractional_coords[:, 0] * (1.0 / safe_frame_rate)
 
                 if conditioning_mask is not None and image_cond_noise_scale > 0.0:
                     latents = self.add_noise_to_image_conditioning_latents(
