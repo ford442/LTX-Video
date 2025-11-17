@@ -76,12 +76,12 @@ def vae_encode(
         if media_items.device.type == "xla":
             xm.mark_step()
         for image_batch in media_items.split(encode_bs):
-            latents.append(vae.encode(image_batch).latent_dist.sample())
+            latents.append(vae.encode(image_batch).latent_dist.mode())
             if media_items.device.type == "xla":
                 xm.mark_step()
         latents = torch.cat(latents, dim=0)
     else:
-        latents = vae.encode(media_items).latent_dist.sample()
+        latents = vae.encode(media_items).latent_dist.mode()
 
     latents = normalize_latents(latents, vae, vae_per_channel_normalize)
     if is_video_shaped and not isinstance(
