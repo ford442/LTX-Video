@@ -7,7 +7,7 @@ from diffusers.utils import logging
 from typing import Optional, List, Union
 import yaml
 
-import imageio
+import imageio.v2 as imageio
 import json
 import numpy as np
 import torch
@@ -650,7 +650,7 @@ def infer(
                 resolution=(height, width, num_frames),
                 dir=output_dir,
             )
-            imageio.imwrite(output_filename, video_np[0])
+            imageio.imwrite(output_filename, video_np[0], quality=100)
         else:
             output_filename = get_unique_filename(
                 f"video_output_{i}",
@@ -662,7 +662,7 @@ def infer(
             )
 
             # Write video
-            with imageio.get_writer(output_filename, fps=fps) as video:
+            with imageio.get_writer(output_filename, fps=fps, quality=10) as video:
                 for frame in video_np:
                     video.append_data(frame)
 
