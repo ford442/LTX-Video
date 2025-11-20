@@ -204,7 +204,7 @@ class AutoencoderKLWrapper(ModelMixin, ConfigMixin):
                     j : j + self.tile_latent_min_size,
                 ]
                 tile = self.post_quant_conv(tile)
-                decoded = self.decoder(tile, target_shape=tile_target_shape)
+                decoded = self.decoder(tile, target_shape=tile_target_shape, timestep=timestep)
                 row.append(decoded)
             rows.append(row)
         result_rows = []
@@ -330,18 +330,20 @@ class AutoencoderKLWrapper(ModelMixin, ConfigMixin):
 
             decoded_tiles = [
                 (
-                    self._hw_tiled_decode(z_tile, target_shape_split)
+                    self._hw_tiled_decode(z_tile, target_shape_split, timestep=timestep)
                     if self.use_hw_tiling
-                    else self._decode(z_tile, target_shape=target_shape_split)
+                    else self._decode(z_tile, target_shape=target_shape_split, timestep=timestep)
                 )
                 for z_tile in torch.tensor_split(z, num_splits, dim=2)
             ]
             decoded = torch.cat(decoded_tiles, dim=2)
         else:
             decoded = (
-                self._hw_tiled_decode(z, target_shape)
-                if self.use_hw_tiling
-                else self._decode(z, target_shape=target_shape, timestep=timestep)
+            # FIX 2: Passing timestep in the non-z-tiling path
+            self._hw_tiled_decode(z, target_shape, timestep=timestep)
+            if self.use_hw_tiling
+            # Pass timestep to _decode here (for no tiling)
+            else self._decode(z, target_shape=target_shape, timestep=timestep)
             )
 
         if not return_dict:
