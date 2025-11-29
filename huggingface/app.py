@@ -3,14 +3,10 @@ import sys
 import os
 import subprocess
 
-def install_torch280cu129():
-     subprocess.run(['sh', './torch.sh'])
-install_torch280cu129()
-
 @spaces.GPU(duration=120)
 def install_flashattn():
-     subprocess.run(['sh', './flashattn.sh'])
-install_flashattn()
+    subprocess.run(['sh', './flashattn.sh'])
+#install_flashattn()
 
 # --- PyTorch Environment Setup ---
 os.environ['PYTORCH_NVML_BASED_CUDA_CHECK'] = '1'
@@ -39,8 +35,8 @@ FTP_DIR = os.getenv("FTP_DIR")
 import cv2
 import gc
 
-#import paramiko
-#from image_gen_aux import UpscaleWithModel
+import paramiko
+#from image_gen_aux import UpscaleWithModel # REMOVED: UpscaleWithModel import
 import numpy as np
 import gradio as gr
 import random
@@ -51,7 +47,7 @@ import tempfile
 from PIL import Image
 from huggingface_hub import hf_hub_download
 import shutil
-from diffusers import StableDiffusionXLImg2ImgPipeline, AutoencoderKL
+from diffusers import AutoencoderKL
 from ltx_video.pipelines.pipeline_ltx_video import ConditioningItem, LTXMultiScalePipeline
 from ltx_video.utils.skip_layer_strategy import SkipLayerStrategy
 
@@ -128,9 +124,11 @@ print("✅ Transformer3DModel patched with robust TeaCache Wrapper.")
 
 MAX_SEED = np.iinfo(np.int32).max
 
+# REMOVED: Upscaler pipeline initialization
 #upscaler = UpscaleWithModel.from_pretrained("Kim2091/ClearRealityV1").to(torch.device("cuda:0"))
-upscaler = None
-print("Loading SDXL Image-to-Image pipeline...")
+
+# REMOVED: SDXL Image-to-Image enhancer pipeline initialization
+# print("Loading SDXL Image-to-Image pipeline...")
 # enhancer_pipeline = StableDiffusionXLImg2ImgPipeline.from_pretrained(
 #     "ford442/stable-diffusion-xl-refiner-1.0-bf16",
 #     use_safetensors=True,
@@ -139,8 +137,7 @@ print("Loading SDXL Image-to-Image pipeline...")
 # enhancer_pipeline.vae.set_default_attn_processor()
 # enhancer_pipeline.to("cpu")
 # print("SDXL Image-to-Image pipeline loaded successfully.")
-enhancer_pipeline = None
-print("SDXL Image-to-Image pipeline loading SKIPPED.")
+
 config_file_path = "configs/ltxv-13b-0.9.8-distilled.yaml"
 with open(config_file_path, "r") as file:
     PIPELINE_CONFIG_YAML = yaml.safe_load(file)
@@ -226,18 +223,14 @@ class FlashAttentionProcessor(AttnProcessor2_0):
 
         query = query * scale
 
-
-        
-        b, t, c = hidden_states.shape
+        b, t, c = query.shape
         h = attn.heads
         d = c // h
-        t_enc = encoder_hidden_states.shape[1]
-        q_reshaped = query.reshape(b, t, h, d).permute(0, 2, 1, 3)
-        # Use t_enc for key/value
-        k_reshaped = key.reshape(b, t_enc, h, d).permute(0, 2, 1, 3)
-        v_reshaped = value.reshape(b, t_enc, h, d).permute(0, 2, 1, 3)
 
-        
+        q_reshaped = query.reshape(b, t, h, d).permute(0, 2, 1, 3)
+        k_reshaped = key.reshape(b, t, h, d).permute(0, 2, 1, 3)
+        v_reshaped = value.reshape(b, t, h, d).permute(0, 2, 1, 3)
+
         out_reshaped = torch.empty_like(q_reshaped)
         fa3_kernel.attention(q_reshaped, k_reshaped, v_reshaped, out_reshaped)
 
@@ -249,9 +242,9 @@ class FlashAttentionProcessor(AttnProcessor2_0):
 fa_processor = FlashAttentionProcessor()
 
 # Iterate through the pipeline's UNet and apply the custom processor
-for name, module in pipeline_instance.transformer.named_modules():
-    if isinstance(module, AttnProcessor2_0):
-        module.processor = fa_processor
+#for name, module in pipeline_instance.transformer.named_modules():
+#    if isinstance(module, AttnProcessor2_0):
+#        module.processor = fa_processor
         
 dynamic_shapes = {
     "hidden_states": {
@@ -330,11 +323,11 @@ def upload_to_sftp(local_filepath):
 
 @spaces.GPU(duration=60)
 def generate_image(prompt, negative_prompt,
-                   height_ui, width_ui, 
+                    height_ui, width_ui, 
                     seed_ui, randomize_seed, 
                     ui_guidance_scale, # <-- PARAMETER ADDED
                     enable_teacache, teacache_threshold, num_steps,
-                   progress=gr.Progress(track_tqdm=True)):
+                    progress=gr.Progress(track_tqdm=True)):
     
     # --- 1. Configure TeaCache (same as single-pass) ---
     try:
@@ -346,7 +339,7 @@ def generate_image(prompt, negative_prompt,
             print("❌ T2I TeaCache is DISABLED.")
     except AttributeError:
         print("⚠️ Could not configure TeaCache on transformer.")
-        
+            
     # --- 2. Setup Precision & Seed ---
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cudnn.allow_tf32 = False
@@ -354,7 +347,7 @@ def generate_image(prompt, negative_prompt,
     torch.cuda.empty_cache()
     
     if randomize_seed: 
-         seed_ui = random.randint(0, 2**32 - 1)
+        seed_ui = random.randint(0, 2**32 - 1)
     seed_everething(int(seed_ui))
     
     # --- 3. Set Dimensions & Padding (Hard-coded to 9 frames) ---
@@ -375,7 +368,7 @@ def generate_image(prompt, negative_prompt,
         "decode_timestep": PIPELINE_CONFIG_YAML["decode_timestep"],
         "decode_noise_scale": PIPELINE_CONFIG_YAML["decode_noise_scale"],
         "stochastic_sampling": PIPELINE_CONFIG_YAML["stochastic_sampling"],
-        "image_cond_noise_scale": 0.05, "is_video": True, "vae_per_channel_normalize": True,
+        "image_cond_noise_scale": 0.15, "is_video": True, "vae_per_channel_normalize": True,
         "mixed_precision": (PIPELINE_CONFIG_YAML["precision"] == "mixed_precision"),
         "offload_to_cpu": False, "enhance_prompt": False
     }
@@ -391,12 +384,30 @@ def generate_image(prompt, negative_prompt,
     pipeline_instance.transformer.previous_residual = None
     pipeline_instance.transformer.accumulated_rel_l1_distance = 0
     
-    single_pass_kwargs = {**call_kwargs, "guidance_scale": float(ui_guidance_scale), **PIPELINE_CONFIG_YAML.get("first_pass", {})}
-    
+    first_pass_config = PIPELINE_CONFIG_YAML.get("first_pass", {})
+
+    # If the config has a list for guidance (Dev model), we MUST use it. 
+    # If it's a simple float (Distilled), we allow the UI to override it.
+    if isinstance(first_pass_config.get("guidance_scale"), list):
+        # Dev model: Priority to Config (Complex Schedule)
+        final_guidance_scale = first_pass_config["guidance_scale"]
+    else:
+        # Distilled model: Priority to UI Slider
+        final_guidance_scale = float(ui_guidance_scale)
+
+    # Remove guidance_scale from first_pass_config so we don't overwrite our logic
+    first_pass_config_clean = {k: v for k, v in first_pass_config.items() if k != 'guidance_scale'}
+
+    single_pass_kwargs = {
+        **call_kwargs, 
+        "guidance_scale": final_guidance_scale, 
+        **first_pass_config_clean
+    }
+
     # --- 5. Run Pipeline ---
     result_images_tensor = pipeline_instance(**single_pass_kwargs).images
     if result_images_tensor is None: 
-         raise gr.Error("Generation failed.")
+        raise gr.Error("Generation failed.")
 
     # Crop padding
     pad_l, pad_r, pad_t, pad_b = padding_values
@@ -424,13 +435,13 @@ def generate_image(prompt, negative_prompt,
     
     # --- 7. Return values ---
     return (
-        display_image,                  # Output to t2i_output_image (PIL)
-        i2v_image_path,                 # Output to image_i2v (filepath)
-        latent_to_return,                  # Output to last_frame_tensor_state
-        seed_ui,                        # Output to seed_input
-        output_tensor_toggle,           # Output to use_last_tensor_toggle
-        gr.update(value=False),         # Output to randomize_seed_input (uncheck it)
-        gr.update(selected="i2v_tab")   # Output to tabs (switch to image-to-video tab)
+        display_image,           # Output to t2i_output_image (PIL)
+        i2v_image_path,          # Output to image_i2v (filepath)
+        latent_to_return,        # Output to last_frame_tensor_state
+        seed_ui,                 # Output to seed_input
+        output_tensor_toggle,    # Output to use_last_tensor_toggle
+        gr.update(value=False),  # Output to randomize_seed_input (uncheck it)
+        gr.update(selected="i2v_tab") # Output to tabs (switch to image-to-video tab)
     )
     
 def calculate_new_dimensions(orig_w, orig_h):
@@ -441,62 +452,12 @@ def calculate_new_dimensions(orig_w, orig_h):
         new_w, new_h = 1024, round((1024 * (orig_h / orig_w)) / 32) * 32
     return int(max(256, min(new_h, MAX_IMAGE_SIZE))), int(max(256, min(new_w, MAX_IMAGE_SIZE)))
 
+# REMOVED: superres_image function
 
-@spaces.GPU(duration=20)
-def superres_image(image_to_enhance: Image.Image):
-    print("Doing super-resolution.")
-    # Use medium precision for speed during enhancement
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = True
-    torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = True
-    torch.backends.cudnn.allow_tf32 = True
-    torch.backends.cudnn.deterministic = True
-    torch.set_float32_matmul_precision("medium")
-    torch.cuda.empty_cache()
-    torch.cuda.reset_peak_memory_stats()
-    
-    with torch.no_grad():
-        upscale_a = upscaler(image_to_enhance, tiling=True, tile_width=256, tile_height=256)
-        upscale = upscaler(upscale_a, tiling=True, tile_width=256, tile_height=256)
-        enhanced_image_a = upscale.resize((upscale.width // 4, upscale.height // 4), Image.LANCZOS)
-        enhanced_image = enhanced_image_a.resize((enhanced_image_a.width // 4, enhanced_image_a.height // 4), Image.LANCZOS)
-    return enhanced_image
+# REMOVED: enhance_frame function
 
-@spaces.GPU(duration=30)
-def enhance_frame(prompt, image_to_enhance: Image.Image):
-    try:
-        print("Moving enhancer pipeline to GPU...")
-        seed = random.randint(0, MAX_SEED)
-        generator = torch.Generator(device='cuda').manual_seed(seed)
-        enhancer_pipeline.to("cuda",torch.bfloat16)
-        torch.cuda.empty_cache()
-        torch.cuda.reset_peak_memory_stats()
-        
-        refine_prompt = prompt +" high detail, sharp focus, 1024x1024, professional"
-        
-        # Use high precision for refiner
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = True
-        torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = True
-        torch.backends.cudnn.allow_tf32 = True
-        torch.backends.cudnn.deterministic = True
-        torch.set_float32_matmul_precision("high")
-        
-        enhanced_image = enhancer_pipeline(prompt=refine_prompt, image=image_to_enhance, strength=0.07, generator=generator, num_inference_steps=180).images[0]
-        print("Frame enhancement successful.")
-    except Exception as e:
-        print(f"Error during frame enhancement: {e}")
-        gr.Warning("Frame enhancement failed. Using original frame.")
-        return image_to_enhance
-    finally:
-        print("Moving enhancer pipeline to CPU...")
-        enhancer_pipeline.to("cpu")
-        gc.collect()
-        torch.cuda.empty_cache()
-        
-    return enhanced_image
-
-def use_last_frame_as_input(prompt, video_filepath, do_enhance, do_superres):
+# MODIFIED: Removed calls to superres_image and enhance_frame
+def use_last_frame_as_input(video_filepath):
     if not video_filepath or not os.path.exists(video_filepath):
         gr.Warning("No video clip available.")
         return None, gr.update()
@@ -511,22 +472,8 @@ def use_last_frame_as_input(prompt, video_filepath, do_enhance, do_superres):
         if not ret: raise ValueError("Failed to read frame.")
         
         pil_image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        print("Displaying original last frame...")
-        yield pil_image, gr.update()
-
-        if do_superres:
-            pil_image = superres_image(pil_image)
-
-        if do_enhance:
-            enhanced_image = enhance_frame(prompt, pil_image)
-            if do_superres:
-                enhanced_image = superres_image(enhanced_image)
-            print("Displaying enhanced frame and switching tab...")
-            yield enhanced_image, gr.update(selected="i2v_tab")
-        else:
-            if do_superres:
-                pil_image = superres_image(pil_image)
-            yield pil_image, gr.update(selected="i2v_tab")
+        print("Displaying last frame and switching tab...")
+        yield pil_image, gr.update(selected="i2v_tab")
 
     except Exception as e:
         gr.Error(f"Failed to extract frame: {e}")
@@ -633,7 +580,7 @@ def generate(prompt, negative_prompt, clips_list, input_image_filepath, input_vi
         "decode_timestep": PIPELINE_CONFIG_YAML["decode_timestep"],
         "decode_noise_scale": PIPELINE_CONFIG_YAML["decode_noise_scale"],
         "stochastic_sampling": PIPELINE_CONFIG_YAML["stochastic_sampling"],
-        "image_cond_noise_scale": 0.05, "is_video": True, "vae_per_channel_normalize": True,
+        "image_cond_noise_scale": 0.15, "is_video": True, "vae_per_channel_normalize": True,
         "mixed_precision": (PIPELINE_CONFIG_YAML["precision"] == "mixed_precision"),
         "offload_to_cpu": False, "enhance_prompt": False
     }
@@ -675,7 +622,7 @@ def generate(prompt, negative_prompt, clips_list, input_image_filepath, input_vi
         print("Using image file as input.")
         media_tensor = load_image_to_tensor_with_resize_and_crop(input_image_filepath, actual_height, actual_width)
         call_kwargs["conditioning_items"] = [ConditioningItem(torch.nn.functional.pad(media_tensor, padding_values).to(target_inference_device), 0, 1.0)]
-        #call_kwargs["image_cond_noise_scale"] = 0.05 # A small value like 0.02 to 0.1 is usually good
+    
     elif mode == "video-to-video": 
         print("Using video file as input.")
         call_kwargs["media_items"] = load_media_file(media_path=input_video_filepath, height=actual_height, width=actual_width, max_frames=int(ui_frames_to_use), padding=padding_values).to(target_inference_device)
@@ -696,8 +643,7 @@ def generate(prompt, negative_prompt, clips_list, input_image_filepath, input_vi
         # --- FIX: Pass temporal_upsampler_to_use as the 3RD POSITIONAL ARG ---
         multi_scale_pipeline = LTXMultiScalePipeline(
             pipeline_instance, 
-            latent_upsampler_instance,
-            #temporal_upscaler=temporal_upsampler_to_use
+            latent_upsampler_instance
         )
         
         pass_args = {"guidance_scale": float(ui_guidance_scale)}
@@ -759,11 +705,11 @@ def generate(prompt, negative_prompt, clips_list, input_image_filepath, input_vi
     return output_video_path, seed_ui, gr.update(visible=True), updated_clips_list, counter_text, gr.update(visible=True, value=True), last_frame_tensor, gr.update(value=False)
 
 def update_task_image(): 
-     return "image-to-video"
+    return "image-to-video"
 def update_task_text(): 
-     return "text-to-video"
+    return "text-to-video"
 def update_task_video(): 
-     return "video-to-video"
+    return "video-to-video"
 
 css="""
 #col-container{margin:0 auto;max-width:900px;}
@@ -818,8 +764,8 @@ with gr.Blocks(css=css) as demo:
             improve_texture = gr.Checkbox(label="Improve Texture (multi-scale)", value=True)
             use_temporal_upscaler = gr.Checkbox(label="Use Temporal Upscaler (for smoothness)", value=True)
             use_last_tensor_toggle = gr.Checkbox(label="Use Last Frame (Direct Tensor)", value=False, visible=False) # <-- For Chaining
-            enhance_checkbox = gr.Checkbox(label="Improve Frame (SDXL Refiner)", value=False)
-            superres_checkbox = gr.Checkbox(label="Upscale Frame (ClearRealityV1)", value=False)
+            # REMOVED: enhance_checkbox
+            # REMOVED: superres_checkbox
             
         with gr.Column():
             output_video = gr.Video(label="Last Generated Clip", interactive=False)
@@ -847,15 +793,15 @@ with gr.Blocks(css=css) as demo:
             )
             
         with gr.Row(): 
-             seed_input = gr.Number(label="Seed", value=42, precision=0); 
-             randomize_seed_input = gr.Checkbox(label="Randomize Seed", value=True)
-             
+            seed_input = gr.Number(label="Seed", value=42, precision=0); 
+            randomize_seed_input = gr.Checkbox(label="Randomize Seed", value=True)
+            
         with gr.Row(visible=True): # <-- MODIFIED
-             guidance_scale_input = gr.Slider(label="Guidance Scale (CFG)", minimum=1.0, maximum=10.0, value=PIPELINE_CONFIG_YAML.get("first_pass", {}).get("guidance_scale", 1.0), step=0.1)
-             
+            guidance_scale_input = gr.Slider(label="Guidance Scale (CFG)", minimum=1.0, maximum=10.0, value=PIPELINE_CONFIG_YAML.get("first_pass", {}).get("guidance_scale", 1.0), step=0.1)
+            
         with gr.Row(): 
-             height_input = gr.Slider(label="Height", value=1024, step=32, minimum=32, maximum=MAX_IMAGE_SIZE); 
-             width_input = gr.Slider(label="Width", value=1024, step=32, minimum=32, maximum=MAX_IMAGE_SIZE); 
+            height_input = gr.Slider(label="Height", value=1024, step=32, minimum=32, maximum=MAX_IMAGE_SIZE); 
+            width_input = gr.Slider(label="Width", value=1024, step=32, minimum=32, maximum=MAX_IMAGE_SIZE); 
         
         num_steps = gr.Slider(label="Steps", value=30, step=1, minimum=1, maximum=420); 
         fps = gr.Slider(label="FPS", value=30.0, step=1.0, minimum=4.0, maximum=60.0)
@@ -869,7 +815,7 @@ with gr.Blocks(css=css) as demo:
         with imageio.get_reader(str(f)) as reader:
             meta = reader.get_meta_data(); orig_w, orig_h = meta.get('size', (reader.get_data(0).shape[1], reader.get_data(0).shape[0])); 
             new_h, new_w = calculate_new_dimensions(orig_w, orig_h); return gr.update(value=new_h), gr.update(value=new_w)
-                
+            
     image_i2v.upload(handle_image_upload_for_dims, [image_i2v, height_input, width_input], [height_input, width_input]); 
     video_v2v.upload(handle_video_upload_for_dims, [video_v2v, height_input, width_input], [height_input, width_input]); 
     image_tab.select(update_task_image, outputs=[mode]); text_tab.select(update_task_text, outputs=[mode]); 
@@ -916,7 +862,7 @@ with gr.Blocks(css=css) as demo:
         width_input, 
         seed_input, 
         randomize_seed_input, 
-        guidance_scale_input,     # <-- MODIFIED
+        guidance_scale_input,      # <-- MODIFIED
         teacache_checkbox, 
         teacache_slider, 
         num_steps
@@ -924,7 +870,7 @@ with gr.Blocks(css=css) as demo:
     
     t2i_outputs = [
     t2i_output_image,
-    image_i2v,                  # <-- ADD THIS (as the 2nd item)
+    image_i2v,                   # <-- ADD THIS (as the 2nd item)
     last_frame_tensor_state,
     seed_input,
     use_last_tensor_toggle,
@@ -939,7 +885,8 @@ with gr.Blocks(css=css) as demo:
         api_name="text_to_image_primer"
     )
     
-    use_last_frame_button.click(fn=use_last_frame_as_input, inputs=[i2v_prompt,output_video,enhance_checkbox, superres_checkbox], outputs=[image_i2v, tabs])
+    # MODIFIED: Removed enhance_checkbox and superres_checkbox from inputs
+    use_last_frame_button.click(fn=use_last_frame_as_input, inputs=[output_video], outputs=[image_i2v, tabs])
     stitch_button.click(fn=stitch_videos, inputs=[clips_state], outputs=[final_video_output])
     
     # Clear button also needs to reset the tensor state and hide the toggle

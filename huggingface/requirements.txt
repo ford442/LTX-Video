@@ -1,24 +1,23 @@
-
 accelerate
-git+https://github.com/huggingface/transformers.git
-git+https://github.com/huggingface/diffusers.git
+transformers
+diffusers
 sentencepiece
 pillow
 PyYAML
 numpy
-torch==2.8.0 --extra-index-url https://download.pytorch.org/whl/cu129
-torchvision==0.23.0 --extra-index-url https://download.pytorch.org/whl/cu129
+torch==2.8.0  # or flash_attn can't install with 2.9.0
+torchvision==0.23.0
 huggingface_hub
 hf_transfer
 spaces
 opencv-python
 imageio[ffmpeg]
 einops
-#timm
+timm
 av
 moviepy==1.0.3
 opencv-python
 safetensors
 #git+https://github.com/ford442/image_gen_aux.git@1ink
-#paramiko
+paramiko
 kernels

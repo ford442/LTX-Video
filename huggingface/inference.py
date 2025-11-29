@@ -7,7 +7,7 @@ from diffusers.utils import logging
 from typing import Optional, List, Union
 import yaml
 
-import imageio.v2 as imageio
+import imageio
 import json
 import numpy as np
 import torch

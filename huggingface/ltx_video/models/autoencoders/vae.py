@@ -181,12 +181,7 @@ class AutoencoderKLWrapper(ModelMixin, ConfigMixin):
             ) + b[:, :, :, :, x] * (x / blend_extent)
         return b
 
-    def _hw_tiled_decode(
-        self,
-        z: torch.FloatTensor,
-        target_shape,
-        timestep: Optional[torch.Tensor] = None,
-    ):
+    def _hw_tiled_decode(self, z: torch.FloatTensor, target_shape):
         overlap_size = int(self.tile_latent_min_size * (1 - self.tile_overlap_factor))
         blend_extent = int(self.tile_sample_min_size * self.tile_overlap_factor)
         row_limit = self.tile_sample_min_size - blend_extent
@@ -209,14 +204,7 @@ class AutoencoderKLWrapper(ModelMixin, ConfigMixin):
                     j : j + self.tile_latent_min_size,
                 ]
                 tile = self.post_quant_conv(tile)
-                if "timestep" in self.decoder_params:
-                    decoded = self.decoder(
-                        tile,
-                        target_shape=tile_target_shape,
-                        timestep=timestep,
-                    )
-                else:
-                    decoded = self.decoder(tile, target_shape=tile_target_shape)
+                decoded = self.decoder(tile, target_shape=tile_target_shape)
                 row.append(decoded)
             rows.append(row)
         result_rows = []
@@ -291,7 +279,7 @@ class AutoencoderKLWrapper(ModelMixin, ConfigMixin):
             eps = self.latent_norm_out.eps
 
             z = z * torch.sqrt(running_var + eps) + running_mean
-        elif isinstance(self.latent_norm_out, nn.BatchNorm2d):
+        elif isinstance(self.latent_norm_out, nn.BatchNorm3d):
             raise NotImplementedError("BatchNorm2d not supported")
         return z
 
@@ -342,30 +330,18 @@ class AutoencoderKLWrapper(ModelMixin, ConfigMixin):
 
             decoded_tiles = [
                 (
-                    self._hw_tiled_decode(
-                        z_tile,
-                        target_shape_split,
-                        timestep=timestep,
-                    )
+                    self._hw_tiled_decode(z_tile, target_shape_split)
                     if self.use_hw_tiling
-                    else self._decode(
-                        z_tile,
-                        target_shape=target_shape_split,
-                        timestep=timestep,
-                    )
+                    else self._decode(z_tile, target_shape=target_shape_split)
                 )
                 for z_tile in torch.tensor_split(z, num_splits, dim=2)
             ]
             decoded = torch.cat(decoded_tiles, dim=2)
         else:
             decoded = (
-                self._hw_tiled_decode(z, target_shape, timestep=timestep)
+                self._hw_tiled_decode(z, target_shape)
                 if self.use_hw_tiling
-                else self._decode(
-                    z,
-                    target_shape=target_shape,
-                    timestep=timestep,
-                )
+                else self._decode(z, target_shape=target_shape, timestep=timestep)
             )
 
         if not return_dict:

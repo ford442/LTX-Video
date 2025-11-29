@@ -315,7 +315,7 @@ class LTXVideoPipeline(DiffusionPipeline):
         negative_prompt_embeds: Optional[torch.FloatTensor] = None,
         prompt_attention_mask: Optional[torch.FloatTensor] = None,
         negative_prompt_attention_mask: Optional[torch.FloatTensor] = None,
-        text_encoder_max_tokens: int = 128,
+        text_encoder_max_tokens: int = 256,
         **kwargs,
     ):
         r"""
@@ -815,7 +815,7 @@ class LTXVideoPipeline(DiffusionPipeline):
         mixed_precision: bool = False,
         offload_to_cpu: bool = False,
         enhance_prompt: bool = False,
-        text_encoder_max_tokens: int = 128,
+        text_encoder_max_tokens: int = 256,
         stochastic_sampling: bool = False,
         media_items: Optional[torch.Tensor] = None,
         tone_map_compression_ratio: float = 0.0,
