@@ -12,3 +12,4 @@ av
 tqdm
 pillow
 scipy>=1.14
+gradio_client
