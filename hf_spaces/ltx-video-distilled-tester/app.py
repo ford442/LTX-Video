@@ -86,6 +86,14 @@ from inference import (
 from moviepy.editor import VideoFileClip, concatenate_videoclips
 from typing import Any, Dict, Optional, Tuple
 
+# Import remote text encoder client
+try:
+    from remote_text_encoder import RemoteTextEncoderClient
+    REMOTE_ENCODER_AVAILABLE = True
+except ImportError:
+    print("⚠️ Remote text encoder client not available")
+    REMOTE_ENCODER_AVAILABLE = False
+
 # Imports for TeaCache
 from ltx_video.models.transformers.transformer3d import Transformer3DModel, Transformer3DModelOutput
 from diffusers.utils import logging
@@ -210,6 +218,17 @@ except Exception as e:
     PIPELINE_CONFIG_YAML["temporal_upscaler_model_path"] = None
 
 # --- Create Pipeline Instances ---
+# Check if remote text encoder should be used
+USE_REMOTE_TEXT_ENCODER = os.getenv("USE_REMOTE_TEXT_ENCODER", "false").lower() == "true"
+REMOTE_ENCODER_SPACE_URL = os.getenv("REMOTE_ENCODER_SPACE_URL", None)
+
+if USE_REMOTE_TEXT_ENCODER:
+    print("=" * 80)
+    print("⚡ REMOTE TEXT ENCODER MODE ENABLED")
+    print(f"   Will use encoder at: {REMOTE_ENCODER_SPACE_URL}")
+    print("   Local T5 text encoder will NOT be loaded")
+    print("=" * 80)
+
 print("Creating LTX Video pipeline on CPU...")
 pipeline_instance = create_ltx_video_pipeline(
     ckpt_path=PIPELINE_CONFIG_YAML["checkpoint_path"],
@@ -219,7 +238,8 @@ pipeline_instance = create_ltx_video_pipeline(
     device="cpu",
     enhance_prompt=False,
     prompt_enhancer_image_caption_model_name_or_path=PIPELINE_CONFIG_YAML["prompt_enhancer_image_caption_model_name_or_path"],
-    prompt_enhancer_llm_model_name_or_path=PIPELINE_CONFIG_YAML["prompt_enhancer_llm_model_name_or_path"]
+    prompt_enhancer_llm_model_name_or_path=PIPELINE_CONFIG_YAML["prompt_enhancer_llm_model_name_or_path"],
+    use_remote_text_encoder=USE_REMOTE_TEXT_ENCODER
 )
 
 # For LTX Video's CausalVideoAutoencoder

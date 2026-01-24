@@ -30,3 +30,4 @@ safetensors
 #git+https://github.com/ford442/image_gen_aux.git@1ink
 paramiko
 kernels
+gradio_client

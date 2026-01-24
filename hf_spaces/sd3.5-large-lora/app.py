@@ -57,6 +57,10 @@ import io
 from google.oauth2 import service_account
 from google.cloud import storage
 
+# Note: SD3.5 Large uses integrated text encoders in the diffusers pipeline.
+# Remote text encoding support is limited - the text encoders are part of the pipeline
+# and cannot be easily separated without significant refactoring.
+# For memory savings, consider using the ltx-video-distilled-tester space instead.
 
 from diffusers import StableDiffusion3Pipeline, SD3Transformer2DModel, AutoencoderKL
 from PIL import Image
@@ -142,12 +146,29 @@ def upload_to_gcs(image_object, filename):
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 def load_model():
-    pipe = StableDiffusion3Pipeline.from_pretrained(
-        "ford442/stable-diffusion-3.5-large-bf16",
-        trust_remote_code=True,
-        transformer=None, # Load transformer separately
-        use_safetensors=True
-    )
+    # Check if we should use remote text encoder
+    use_remote_encoder = os.getenv("USE_REMOTE_TEXT_ENCODER", "false").lower() == "true"
+    
+    if use_remote_encoder:
+        print("🔄 Loading model WITHOUT text encoders (will use remote encoding)...")
+        pipe = StableDiffusion3Pipeline.from_pretrained(
+            "ford442/stable-diffusion-3.5-large-bf16",
+            trust_remote_code=True,
+            transformer=None, # Load transformer separately
+            text_encoder=None,  # Skip text encoder loading
+            text_encoder_2=None,  # Skip text encoder 2 loading
+            text_encoder_3=None,  # Skip text encoder 3 loading
+            use_safetensors=True
+        )
+    else:
+        print("🔄 Loading model with local text encoders...")
+        pipe = StableDiffusion3Pipeline.from_pretrained(
+            "ford442/stable-diffusion-3.5-large-bf16",
+            trust_remote_code=True,
+            transformer=None, # Load transformer separately
+            use_safetensors=True
+        )
+    
     ll_transformer=SD3Transformer2DModel.from_pretrained("ford442/stable-diffusion-3.5-large-bf16", subfolder='transformer').to(device, dtype=torch.bfloat16)
     pipe.transformer=ll_transformer
     pipe.load_lora_weights("ford442/sdxl-vae-bf16", weight_name="LoRA/UltraReal.safetensors")

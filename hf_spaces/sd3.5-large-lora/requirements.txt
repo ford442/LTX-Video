@@ -30,3 +30,4 @@ git+https://github.com/huggingface/diffusers.git
 #git+https://github.com/facebookresearch/xformers.git
 
 kernels
+gradio_client

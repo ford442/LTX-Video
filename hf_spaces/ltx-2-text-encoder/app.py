@@ -68,12 +68,13 @@ def encode_text_simple(text_encoder, prompt: str):
 
 @spaces.GPU()
 @torch.inference_mode()  # Optimizes memory and speed by disabling gradient tracking
-def encode_prompt(
+def encode_prompt_api(
     prompt: str,
     negative_prompt: str = ""
 ):
     """
-    Encode a text prompt using Gemma text encoder.
+    Encode a text prompt using Gemma text encoder and return embeddings directly for API use.
+    Returns a dict with embedding data that can be used by remote clients.
     """
     start_time = time.time()
 
@@ -87,20 +88,12 @@ def encode_prompt(
         if negative_prompt:
             video_context_negative, audio_context_negative = encode_text_simple(text_encoder, negative_prompt)
 
-        # Output directory setup
-        output_dir = Path("embeddings")
-        output_dir.mkdir(exist_ok=True)
-        
-        # Create a clean filename from the prompt (first 30 chars, safe chars only)
-        safe_name = "".join([c for c in prompt[:30] if c.isalnum() or c in (' ', '_')]).strip().replace(' ', '_')
-        output_path = output_dir / f"emb_{safe_name}_{int(time.time())}.pt"
-
         # Prepare data dict
         embedding_data = {
             'video_context': video_context.cpu(),
             'audio_context': audio_context.cpu(),
             'prompt': prompt,
-            'original_prompt': prompt, # Kept for compatibility
+            'original_prompt': prompt,
         }
 
         # Add negative contexts if they were encoded
@@ -109,8 +102,6 @@ def encode_prompt(
             embedding_data['audio_context_negative'] = audio_context_negative.cpu()
             embedding_data['negative_prompt'] = negative_prompt
 
-        torch.save(embedding_data, output_path)
-
         # Get memory stats
         elapsed_time = time.time() - start_time
         if torch.cuda.is_available():
@@ -118,6 +109,42 @@ def encode_prompt(
             status = f"✓ Encoded in {elapsed_time:.2f}s | VRAM Alloc: {allocated:.2f}GB"
         else:
             status = f"✓ Encoded in {elapsed_time:.2f}s (CPU mode)"
+
+        return embedding_data, status
+
+    except Exception as e:
+        import traceback
+        error_msg = f"Error: {str(e)}\n{traceback.format_exc()}"
+        print(error_msg)
+        return None, error_msg
+
+@spaces.GPU()
+@torch.inference_mode()  # Optimizes memory and speed by disabling gradient tracking
+def encode_prompt(
+    prompt: str,
+    negative_prompt: str = ""
+):
+    """
+    Encode a text prompt using Gemma text encoder and save to file.
+    """
+    start_time = time.time()
+
+    try:
+        # Use the API function to get embeddings
+        embedding_data, status = encode_prompt_api(prompt, negative_prompt)
+        
+        if embedding_data is None:
+            return None, status
+
+        # Output directory setup
+        output_dir = Path("embeddings")
+        output_dir.mkdir(exist_ok=True)
+        
+        # Create a clean filename from the prompt (first 30 chars, safe chars only)
+        safe_name = "".join([c for c in prompt[:30] if c.isalnum() or c in (' ', '_')]).strip().replace(' ', '_')
+        output_path = output_dir / f"emb_{safe_name}_{int(time.time())}.pt"
+
+        torch.save(embedding_data, output_path)
 
         return str(output_path), status
 
@@ -133,35 +160,109 @@ with gr.Blocks(title="LTX-2 Gemma Text Encoder (Pure)") as demo:
     gr.Markdown("""
     **Standalone Encoder:** Encodes prompts into embeddings for LTX-2. 
     Does not perform prompt enhancement/expansion.
+    
+    **API Usage:** This space can be called remotely by other spaces using Gradio Client API.
     """)
 
-    with gr.Row():
-        with gr.Column():
-            prompt_input = gr.Textbox(
-                label="Prompt",
-                placeholder="Enter your prompt here...",
-                lines=5,
-                value="An astronaut hatches from a fragile egg on the surface of the Moon"
+    with gr.Tabs():
+        with gr.Tab("Encode to File"):
+            with gr.Row():
+                with gr.Column():
+                    prompt_input = gr.Textbox(
+                        label="Prompt",
+                        placeholder="Enter your prompt here...",
+                        lines=5,
+                        value="An astronaut hatches from a fragile egg on the surface of the Moon"
+                    )
+
+                    negative_prompt_input = gr.Textbox(
+                        label="Negative Prompt (Optional)",
+                        placeholder="Enter negative prompt...",
+                        lines=2,
+                        value=""
+                    )
+
+                    encode_btn = gr.Button("Encode Prompt", variant="primary", size="lg")
+
+                with gr.Column():
+                    embedding_file = gr.File(label="Embedding File (.pt)")
+                    status_output = gr.Textbox(label="Status", lines=1)
+
+            encode_btn.click(
+                fn=encode_prompt,
+                inputs=[prompt_input, negative_prompt_input],
+                outputs=[embedding_file, status_output]
             )
+        
+        with gr.Tab("API Endpoint"):
+            gr.Markdown("""
+            ### Remote API Endpoint
+            This endpoint returns embeddings directly without saving to file.
+            Other spaces can call this using Gradio Client API:
+            
+            ```python
+            from gradio_client import Client
+            client = Client("your-space-name/ltx-2-text-encoder")
+            result = client.predict(prompt="...", negative_prompt="...", api_name="/encode_api")
+            ```
+            """)
+            with gr.Row():
+                with gr.Column():
+                    api_prompt_input = gr.Textbox(
+                        label="Prompt",
+                        placeholder="Enter your prompt here...",
+                        lines=5,
+                        value="An astronaut hatches from a fragile egg on the surface of the Moon"
+                    )
 
-            negative_prompt_input = gr.Textbox(
-                label="Negative Prompt (Optional)",
-                placeholder="Enter negative prompt...",
-                lines=2,
-                value=""
+                    api_negative_prompt_input = gr.Textbox(
+                        label="Negative Prompt (Optional)",
+                        placeholder="Enter negative prompt...",
+                        lines=2,
+                        value=""
+                    )
+
+                    api_encode_btn = gr.Button("Test API Encoding", variant="primary", size="lg")
+
+                with gr.Column():
+                    api_status_output = gr.Textbox(label="Status", lines=3)
+                    api_shapes_output = gr.Textbox(label="Embedding Shapes", lines=3)
+
+            def test_api_encoding(prompt, negative_prompt):
+                """Test function to show API response format"""
+                embeddings, status = encode_prompt_api(prompt, negative_prompt)
+                if embeddings is None:
+                    return status, "Error occurred"
+                
+                shapes_info = f"video_context: {embeddings['video_context'].shape}\n"
+                shapes_info += f"audio_context: {embeddings['audio_context'].shape}\n"
+                if 'video_context_negative' in embeddings:
+                    shapes_info += f"video_context_negative: {embeddings['video_context_negative'].shape}\n"
+                    shapes_info += f"audio_context_negative: {embeddings['audio_context_negative'].shape}"
+                
+                return status, shapes_info
+
+            api_encode_btn.click(
+                fn=test_api_encoding,
+                inputs=[api_prompt_input, api_negative_prompt_input],
+                outputs=[api_status_output, api_shapes_output]
             )
-
-            encode_btn = gr.Button("Encode Prompt", variant="primary", size="lg")
-
-        with gr.Column():
-            embedding_file = gr.File(label="Embedding File (.pt)")
-            status_output = gr.Textbox(label="Status", lines=1)
-
-    encode_btn.click(
-        fn=encode_prompt,
-        inputs=[prompt_input, negative_prompt_input],
-        outputs=[embedding_file, status_output]
-    )
+            
+            # Hidden API endpoint for remote calls
+            demo.api_name = "encode_api"
+            gr.Interface(
+                fn=encode_prompt_api,
+                inputs=[
+                    gr.Textbox(label="Prompt"),
+                    gr.Textbox(label="Negative Prompt", value="")
+                ],
+                outputs=[
+                    gr.JSON(label="Embedding Data"),
+                    gr.Textbox(label="Status")
+                ],
+                allow_flagging="never",
+                api_name="encode_api"
+            )
 
 css = '''
 .gradio-container .contain{max-width: 1200px !important; margin: 0 auto !important}

@@ -307,6 +307,7 @@ def create_ltx_video_pipeline(
     enhance_prompt: bool = False,
     prompt_enhancer_image_caption_model_name_or_path: Optional[str] = None,
     prompt_enhancer_llm_model_name_or_path: Optional[str] = None,
+    use_remote_text_encoder: bool = False,
 ) -> LTXVideoPipeline:
     ckpt_path = Path(ckpt_path)
     assert os.path.exists(
@@ -330,17 +331,27 @@ def create_ltx_video_pipeline(
             sampler=("Uniform" if sampler.lower() == "uniform" else "LinearQuadratic")
         )
 
-    text_encoder = T5EncoderModel.from_pretrained(
-        text_encoder_model_name_or_path, subfolder="text_encoder"
-    )
+    # Load text encoder only if not using remote encoding
+    if use_remote_text_encoder:
+        print("⚡ Skipping local text encoder loading - will use remote encoding")
+        text_encoder = None
+        tokenizer = None
+    else:
+        print("📝 Loading local text encoder...")
+        text_encoder = T5EncoderModel.from_pretrained(
+            text_encoder_model_name_or_path, subfolder="text_encoder"
+        )
+        tokenizer = T5Tokenizer.from_pretrained(
+            text_encoder_model_name_or_path, subfolder="tokenizer"
+        )
+    
     patchifier = SymmetricPatchifier(patch_size=1)
-    tokenizer = T5Tokenizer.from_pretrained(
-        text_encoder_model_name_or_path, subfolder="tokenizer"
-    )
 
     transformer = transformer.to(device)
     vae = vae.to(device)
-    text_encoder = text_encoder.to(device)
+    
+    if text_encoder is not None:
+        text_encoder = text_encoder.to(device)
 
     if enhance_prompt:
         prompt_enhancer_image_caption_model = AutoModelForCausalLM.from_pretrained(
@@ -365,7 +376,9 @@ def create_ltx_video_pipeline(
     vae = vae.to(torch.bfloat16)
     if precision == "bfloat16" and transformer.dtype != torch.bfloat16:
         transformer = transformer.to(torch.bfloat16)
-    text_encoder = text_encoder.to(torch.bfloat16)
+    
+    if text_encoder is not None:
+        text_encoder = text_encoder.to(torch.bfloat16)
 
     # Use submodels for the pipeline
     submodel_dict = {
