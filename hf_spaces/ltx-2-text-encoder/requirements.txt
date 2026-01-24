@@ -1,0 +1,14 @@
+git+https://github.com/linoytsaban/LTX-2.git#subdirectory=packages/ltx-core
+git+https://github.com/linoytsaban/LTX-2.git#subdirectory=packages/ltx-pipelines
+einops
+numpy
+torchaudio
+transformers
+safetensors
+accelerate
+flashpack==0.1.2
+scikit-image>=0.25.2
+av
+tqdm
+pillow
+scipy>=1.14
