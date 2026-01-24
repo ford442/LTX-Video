@@ -232,6 +232,14 @@ Simply provide a list of paths to the images or video segments you want to condi
 python inference.py --prompt "PROMPT" --conditioning_media_paths IMAGE_OR_VIDEO_PATH_1 IMAGE_OR_VIDEO_PATH_2 --conditioning_start_frames TARGET_FRAME_1 TARGET_FRAME_2 --height HEIGHT --width WIDTH --num_frames NUM_FRAMES --seed SEED --pipeline_config configs/ltxv-13b-0.9.8-distilled.yaml
 ```
 
+#### For video generation with pre-computed text embeddings:
+
+Save ~3GB VRAM by pre-computing text embeddings separately. See [Text Embeddings Guide](docs/text_embeddings_guide.md) for details.
+
+```bash
+python inference.py --embeddings_path PATH_TO_EMBEDDINGS.pt --height HEIGHT --width WIDTH --num_frames NUM_FRAMES --seed SEED --pipeline_config configs/ltxv-13b-0.9.8-distilled.yaml
+```
+
 ### Using as a library
 
 ```python
@@ -275,6 +283,27 @@ When writing prompts, focus on detailed, chronological descriptions of actions a
 ### Automatic Prompt Enhancement
 
 When using `LTXVideoPipeline` directly, you can enable prompt enhancement by setting `enhance_prompt=True`.
+
+## 💾 Pre-computed Text Embeddings
+
+You can optimize VRAM usage by pre-computing text embeddings separately from video generation. This saves ~3GB VRAM and enables flexible workflows.
+
+**Benefits:**
+- Save VRAM during video generation
+- Reuse embeddings for multiple generations
+- Run text encoding on different hardware than video generation
+- See the [Text Embeddings Guide](docs/text_embeddings_guide.md) for detailed instructions
+
+**Quick Example:**
+```bash
+# Encode prompt using the text encoder space
+cd hf_spaces/ltx-text-encoder && python app.py
+
+# Generate video with pre-computed embeddings
+python inference.py --embeddings_path embeddings.pt --height 704 --width 1216 --num_frames 121
+```
+
+Check out the [Colab notebook](ltx_video_embeddings_stitching_colab.ipynb) for a complete example including video stitching.
 
 ## 🎮 Parameter Guide
 
