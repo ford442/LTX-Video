@@ -111,43 +111,55 @@ class RemoteTextEncoderClient:
             print(f"❌ Remote encoding failed: {e}")
             raise
     
+    def _parse_dtype(self, dtype_str: str) -> torch.dtype:
+        """Parse dtype string to torch.dtype."""
+        if not dtype_str:
+            return torch.float32
+        
+        # Handle both "torch.float32" and "float32" formats
+        dtype_name = dtype_str.replace('torch.', '')
+        
+        try:
+            # Try to get dtype from torch module dynamically
+            return getattr(torch, dtype_name)
+        except AttributeError:
+            # Fallback to hardcoded mapping for safety
+            dtype_map = {
+                'float32': torch.float32,
+                'float16': torch.float16,
+                'bfloat16': torch.bfloat16,
+                'float64': torch.float64,
+                'int32': torch.int32,
+                'int64': torch.int64,
+            }
+            return dtype_map.get(dtype_name, torch.float32)
+    
     def _deserialize_tensor(self, tensor_data: Any, tensor_shape: list, device: str, dtype_str: str = None) -> torch.Tensor:
         """Convert received tensor data to torch.Tensor on specified device with proper dtype."""
         # Parse dtype string if provided
-        dtype = None
-        if dtype_str:
-            # Convert string like "torch.bfloat16" to actual dtype
-            dtype_map = {
-                'torch.float32': torch.float32,
-                'torch.float16': torch.float16,
-                'torch.bfloat16': torch.bfloat16,
-                'torch.float64': torch.float64,
-                'torch.int32': torch.int32,
-                'torch.int64': torch.int64,
-            }
-            dtype = dtype_map.get(dtype_str, torch.float32)
+        dtype = self._parse_dtype(dtype_str) if dtype_str else torch.float32
         
         if isinstance(tensor_data, torch.Tensor):
             tensor = tensor_data
-            if dtype and tensor.dtype != dtype:
+            if tensor.dtype != dtype:
                 tensor = tensor.to(dtype)
             return tensor.to(device)
         
         # Convert list to tensor with the provided shape
         if isinstance(tensor_data, (list, tuple)):
-            tensor = torch.tensor(tensor_data, dtype=dtype if dtype else torch.float32).reshape(tensor_shape)
+            tensor = torch.tensor(tensor_data, dtype=dtype).reshape(tensor_shape)
             return tensor.to(device)
         
         # If it's already a numpy array
         if hasattr(tensor_data, 'shape'):
             tensor = torch.from_numpy(tensor_data)
-            if dtype and tensor.dtype != dtype:
+            if tensor.dtype != dtype:
                 tensor = tensor.to(dtype)
             return tensor.to(device)
         
         # Try direct conversion as fallback
         try:
-            tensor = torch.tensor(tensor_data, dtype=dtype if dtype else torch.float32)
+            tensor = torch.tensor(tensor_data, dtype=dtype)
             return tensor.to(device)
         except Exception as e:
             print(f"Warning: Failed to deserialize tensor: {e}")

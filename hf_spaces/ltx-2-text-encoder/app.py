@@ -279,8 +279,9 @@ with gr.Blocks(title="LTX-2 Gemma Text Encoder (Pure)") as demo:
                 outputs=[api_status_output, api_shapes_output]
             )
             
-    # Create a separate endpoint for API calls using gr.Interface
-    # This will be accessible via the Gradio Client API
+    # Note: Using a hidden tab to expose the API endpoint is a Gradio pattern
+    # for providing API-only functions that shouldn't be visible in the UI.
+    # The function is still accessible via Gradio Client API at /encode_api.
     with gr.Tab("Hidden API", visible=False):
         api_interface = gr.Interface(
             fn=encode_prompt_api,
