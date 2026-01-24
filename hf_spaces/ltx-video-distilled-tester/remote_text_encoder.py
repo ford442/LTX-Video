@@ -77,18 +77,30 @@ class RemoteTextEncoderClient:
             embedding_data, status = result
             print(f"✅ Remote encoding complete: {status}")
             
-            # Convert embedding data back to tensors
-            video_context = self._deserialize_tensor(embedding_data['video_context'], device)
-            audio_context = self._deserialize_tensor(embedding_data['audio_context'], device)
+            # Convert embedding data back to tensors with proper shapes
+            video_context = self._deserialize_tensor(
+                embedding_data['video_context'],
+                embedding_data['video_context_shape'],
+                device
+            )
+            audio_context = self._deserialize_tensor(
+                embedding_data['audio_context'],
+                embedding_data['audio_context_shape'],
+                device
+            )
             
             video_context_negative = None
             audio_context_negative = None
             if 'video_context_negative' in embedding_data:
                 video_context_negative = self._deserialize_tensor(
-                    embedding_data['video_context_negative'], device
+                    embedding_data['video_context_negative'],
+                    embedding_data['video_context_negative_shape'],
+                    device
                 )
                 audio_context_negative = self._deserialize_tensor(
-                    embedding_data['audio_context_negative'], device
+                    embedding_data['audio_context_negative'],
+                    embedding_data['audio_context_negative_shape'],
+                    device
                 )
             
             return video_context, audio_context, video_context_negative, audio_context_negative
@@ -97,25 +109,28 @@ class RemoteTextEncoderClient:
             print(f"❌ Remote encoding failed: {e}")
             raise
     
-    def _deserialize_tensor(self, tensor_data: Any, device: str) -> torch.Tensor:
+    def _deserialize_tensor(self, tensor_data: Any, tensor_shape: list, device: str) -> torch.Tensor:
         """Convert received tensor data to torch.Tensor on specified device."""
         if isinstance(tensor_data, torch.Tensor):
             return tensor_data.to(device)
         
-        # If it's serialized data, try to reconstruct
-        if isinstance(tensor_data, dict):
-            # Gradio may send tensor as dict with data and metadata
-            if 'data' in tensor_data and 'shape' in tensor_data:
-                tensor = torch.tensor(tensor_data['data']).reshape(tensor_data['shape'])
-                return tensor.to(device)
+        # Convert list to tensor with the provided shape
+        if isinstance(tensor_data, (list, tuple)):
+            tensor = torch.tensor(tensor_data).reshape(tensor_shape)
+            return tensor.to(device)
         
-        # Try direct conversion
+        # If it's already a numpy array
+        if hasattr(tensor_data, 'shape'):
+            tensor = torch.from_numpy(tensor_data)
+            return tensor.to(device)
+        
+        # Try direct conversion as fallback
         try:
             tensor = torch.tensor(tensor_data)
             return tensor.to(device)
         except Exception as e:
             print(f"Warning: Failed to deserialize tensor: {e}")
-            return tensor_data
+            raise
 
 
 def encode_prompt_with_remote_fallback(

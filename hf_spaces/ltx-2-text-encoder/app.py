@@ -88,18 +88,23 @@ def encode_prompt_api(
         if negative_prompt:
             video_context_negative, audio_context_negative = encode_text_simple(text_encoder, negative_prompt)
 
-        # Prepare data dict
+        # Convert tensors to numpy arrays for serialization
+        # Gradio can serialize numpy arrays but not torch tensors
         embedding_data = {
-            'video_context': video_context.cpu(),
-            'audio_context': audio_context.cpu(),
+            'video_context': video_context.cpu().numpy().tolist(),
+            'video_context_shape': list(video_context.shape),
+            'audio_context': audio_context.cpu().numpy().tolist(),
+            'audio_context_shape': list(audio_context.shape),
             'prompt': prompt,
             'original_prompt': prompt,
         }
 
         # Add negative contexts if they were encoded
         if video_context_negative is not None:
-            embedding_data['video_context_negative'] = video_context_negative.cpu()
-            embedding_data['audio_context_negative'] = audio_context_negative.cpu()
+            embedding_data['video_context_negative'] = video_context_negative.cpu().numpy().tolist()
+            embedding_data['video_context_negative_shape'] = list(video_context_negative.shape)
+            embedding_data['audio_context_negative'] = audio_context_negative.cpu().numpy().tolist()
+            embedding_data['audio_context_negative_shape'] = list(audio_context_negative.shape)
             embedding_data['negative_prompt'] = negative_prompt
 
         # Get memory stats
@@ -136,6 +141,23 @@ def encode_prompt(
         if embedding_data is None:
             return None, status
 
+        # Convert lists back to tensors for saving
+        embedding_data_tensors = {
+            'video_context': torch.tensor(embedding_data['video_context']).reshape(embedding_data['video_context_shape']),
+            'audio_context': torch.tensor(embedding_data['audio_context']).reshape(embedding_data['audio_context_shape']),
+            'prompt': prompt,
+            'original_prompt': prompt,
+        }
+        
+        if 'video_context_negative' in embedding_data:
+            embedding_data_tensors['video_context_negative'] = torch.tensor(
+                embedding_data['video_context_negative']
+            ).reshape(embedding_data['video_context_negative_shape'])
+            embedding_data_tensors['audio_context_negative'] = torch.tensor(
+                embedding_data['audio_context_negative']
+            ).reshape(embedding_data['audio_context_negative_shape'])
+            embedding_data_tensors['negative_prompt'] = negative_prompt
+
         # Output directory setup
         output_dir = Path("embeddings")
         output_dir.mkdir(exist_ok=True)
@@ -144,7 +166,7 @@ def encode_prompt(
         safe_name = "".join([c for c in prompt[:30] if c.isalnum() or c in (' ', '_')]).strip().replace(' ', '_')
         output_path = output_dir / f"emb_{safe_name}_{int(time.time())}.pt"
 
-        torch.save(embedding_data, output_path)
+        torch.save(embedding_data_tensors, output_path)
 
         return str(output_path), status
 
@@ -234,11 +256,11 @@ with gr.Blocks(title="LTX-2 Gemma Text Encoder (Pure)") as demo:
                 if embeddings is None:
                     return status, "Error occurred"
                 
-                shapes_info = f"video_context: {embeddings['video_context'].shape}\n"
-                shapes_info += f"audio_context: {embeddings['audio_context'].shape}\n"
-                if 'video_context_negative' in embeddings:
-                    shapes_info += f"video_context_negative: {embeddings['video_context_negative'].shape}\n"
-                    shapes_info += f"audio_context_negative: {embeddings['audio_context_negative'].shape}"
+                shapes_info = f"video_context: {embeddings['video_context_shape']}\n"
+                shapes_info += f"audio_context: {embeddings['audio_context_shape']}\n"
+                if 'video_context_negative_shape' in embeddings:
+                    shapes_info += f"video_context_negative: {embeddings['video_context_negative_shape']}\n"
+                    shapes_info += f"audio_context_negative: {embeddings['audio_context_negative_shape']}"
                 
                 return status, shapes_info
 
@@ -248,21 +270,21 @@ with gr.Blocks(title="LTX-2 Gemma Text Encoder (Pure)") as demo:
                 outputs=[api_status_output, api_shapes_output]
             )
             
-            # Hidden API endpoint for remote calls
-            demo.api_name = "encode_api"
-            gr.Interface(
-                fn=encode_prompt_api,
-                inputs=[
-                    gr.Textbox(label="Prompt"),
-                    gr.Textbox(label="Negative Prompt", value="")
-                ],
-                outputs=[
-                    gr.JSON(label="Embedding Data"),
-                    gr.Textbox(label="Status")
-                ],
-                allow_flagging="never",
-                api_name="encode_api"
-            )
+    # Create a separate endpoint for API calls using gr.Interface
+    # This will be accessible via the Gradio Client API
+    with gr.Tab("Hidden API", visible=False):
+        api_interface = gr.Interface(
+            fn=encode_prompt_api,
+            inputs=[
+                gr.Textbox(label="Prompt"),
+                gr.Textbox(label="Negative Prompt", value="")
+            ],
+            outputs=[
+                gr.JSON(label="Embedding Data"),
+                gr.Textbox(label="Status")
+            ],
+            api_name="encode_api"
+        )
 
 css = '''
 .gradio-container .contain{max-width: 1200px !important; margin: 0 auto !important}
