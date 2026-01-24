@@ -86,13 +86,12 @@ from inference import (
 from moviepy.editor import VideoFileClip, concatenate_videoclips
 from typing import Any, Dict, Optional, Tuple
 
-# Import remote text encoder client
+# Import remote text encoder client if available
 try:
     from remote_text_encoder import RemoteTextEncoderClient
-    REMOTE_ENCODER_AVAILABLE = True
 except ImportError:
     print("⚠️ Remote text encoder client not available")
-    REMOTE_ENCODER_AVAILABLE = False
+    RemoteTextEncoderClient = None
 
 # Imports for TeaCache
 from ltx_video.models.transformers.transformer3d import Transformer3DModel, Transformer3DModelOutput

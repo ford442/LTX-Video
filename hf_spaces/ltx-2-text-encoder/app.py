@@ -75,6 +75,10 @@ def encode_prompt_api(
     """
     Encode a text prompt using Gemma text encoder and return embeddings directly for API use.
     Returns a dict with embedding data that can be used by remote clients.
+    
+    Note: Converts tensors to lists for JSON serialization. This is less efficient than
+    binary formats but provides better compatibility with Gradio Client API and debugging.
+    For high-throughput scenarios, consider implementing a binary protocol.
     """
     start_time = time.time()
 
@@ -90,11 +94,14 @@ def encode_prompt_api(
 
         # Convert tensors to numpy arrays for serialization
         # Gradio can serialize numpy arrays but not torch tensors
+        # Store dtype information for reconstruction
         embedding_data = {
             'video_context': video_context.cpu().numpy().tolist(),
             'video_context_shape': list(video_context.shape),
+            'video_context_dtype': str(video_context.dtype),
             'audio_context': audio_context.cpu().numpy().tolist(),
             'audio_context_shape': list(audio_context.shape),
+            'audio_context_dtype': str(audio_context.dtype),
             'prompt': prompt,
             'original_prompt': prompt,
         }
@@ -103,8 +110,10 @@ def encode_prompt_api(
         if video_context_negative is not None:
             embedding_data['video_context_negative'] = video_context_negative.cpu().numpy().tolist()
             embedding_data['video_context_negative_shape'] = list(video_context_negative.shape)
+            embedding_data['video_context_negative_dtype'] = str(video_context_negative.dtype)
             embedding_data['audio_context_negative'] = audio_context_negative.cpu().numpy().tolist()
             embedding_data['audio_context_negative_shape'] = list(audio_context_negative.shape)
+            embedding_data['audio_context_negative_dtype'] = str(audio_context_negative.dtype)
             embedding_data['negative_prompt'] = negative_prompt
 
         # Get memory stats

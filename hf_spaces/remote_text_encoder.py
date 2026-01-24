@@ -6,8 +6,6 @@ Utility for calling remote text encoder spaces via Gradio Client API.
 import torch
 import os
 from typing import Optional, Tuple, Dict, Any
-import io
-import pickle
 
 
 class RemoteTextEncoderClient:
@@ -77,16 +75,18 @@ class RemoteTextEncoderClient:
             embedding_data, status = result
             print(f"✅ Remote encoding complete: {status}")
             
-            # Convert embedding data back to tensors with proper shapes
+            # Convert embedding data back to tensors with proper shapes and dtypes
             video_context = self._deserialize_tensor(
                 embedding_data['video_context'],
                 embedding_data['video_context_shape'],
-                device
+                device,
+                embedding_data.get('video_context_dtype', 'torch.bfloat16')
             )
             audio_context = self._deserialize_tensor(
                 embedding_data['audio_context'],
                 embedding_data['audio_context_shape'],
-                device
+                device,
+                embedding_data.get('audio_context_dtype', 'torch.bfloat16')
             )
             
             video_context_negative = None
@@ -95,12 +95,14 @@ class RemoteTextEncoderClient:
                 video_context_negative = self._deserialize_tensor(
                     embedding_data['video_context_negative'],
                     embedding_data['video_context_negative_shape'],
-                    device
+                    device,
+                    embedding_data.get('video_context_negative_dtype', 'torch.bfloat16')
                 )
                 audio_context_negative = self._deserialize_tensor(
                     embedding_data['audio_context_negative'],
                     embedding_data['audio_context_negative_shape'],
-                    device
+                    device,
+                    embedding_data.get('audio_context_negative_dtype', 'torch.bfloat16')
                 )
             
             return video_context, audio_context, video_context_negative, audio_context_negative
@@ -109,24 +111,43 @@ class RemoteTextEncoderClient:
             print(f"❌ Remote encoding failed: {e}")
             raise
     
-    def _deserialize_tensor(self, tensor_data: Any, tensor_shape: list, device: str) -> torch.Tensor:
-        """Convert received tensor data to torch.Tensor on specified device."""
+    def _deserialize_tensor(self, tensor_data: Any, tensor_shape: list, device: str, dtype_str: str = None) -> torch.Tensor:
+        """Convert received tensor data to torch.Tensor on specified device with proper dtype."""
+        # Parse dtype string if provided
+        dtype = None
+        if dtype_str:
+            # Convert string like "torch.bfloat16" to actual dtype
+            dtype_map = {
+                'torch.float32': torch.float32,
+                'torch.float16': torch.float16,
+                'torch.bfloat16': torch.bfloat16,
+                'torch.float64': torch.float64,
+                'torch.int32': torch.int32,
+                'torch.int64': torch.int64,
+            }
+            dtype = dtype_map.get(dtype_str, torch.float32)
+        
         if isinstance(tensor_data, torch.Tensor):
-            return tensor_data.to(device)
+            tensor = tensor_data
+            if dtype and tensor.dtype != dtype:
+                tensor = tensor.to(dtype)
+            return tensor.to(device)
         
         # Convert list to tensor with the provided shape
         if isinstance(tensor_data, (list, tuple)):
-            tensor = torch.tensor(tensor_data).reshape(tensor_shape)
+            tensor = torch.tensor(tensor_data, dtype=dtype if dtype else torch.float32).reshape(tensor_shape)
             return tensor.to(device)
         
         # If it's already a numpy array
         if hasattr(tensor_data, 'shape'):
             tensor = torch.from_numpy(tensor_data)
+            if dtype and tensor.dtype != dtype:
+                tensor = tensor.to(dtype)
             return tensor.to(device)
         
         # Try direct conversion as fallback
         try:
-            tensor = torch.tensor(tensor_data)
+            tensor = torch.tensor(tensor_data, dtype=dtype if dtype else torch.float32)
             return tensor.to(device)
         except Exception as e:
             print(f"Warning: Failed to deserialize tensor: {e}")
