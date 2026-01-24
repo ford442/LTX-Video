@@ -8,7 +8,7 @@ def _encode_single_frame(output_file, image_array: np.ndarray, crf):
     container = av.open(output_file, "w", format="mp4")
     try:
         stream = container.add_stream(
-            "libx264", rate=1, options={"crf": str(crf), "preset": "veryfast"}
+            "libx264", rate=1, options={"crf": str(crf), "preset": "veryslow"}
         )
         stream.height = image_array.shape[0]
         stream.width = image_array.shape[1]

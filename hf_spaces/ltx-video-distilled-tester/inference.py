@@ -97,7 +97,7 @@ def load_image_to_tensor_with_resize_and_crop(
 
     image = image.crop((x_start, y_start, x_start + new_width, y_start + new_height))
     if not just_crop:
-        image = image.resize((target_width, target_height))
+        image = image.resize((target_width, target_height), Image.LANCZOS)
 
     image = np.array(image)
     image = cv2.GaussianBlur(image, (3, 3), 0)
