@@ -292,10 +292,46 @@ def main():
         nargs="*",
         help="List of frame indices where each conditioning item should be applied. Must match the number of conditioning items.",
     )
+    
+    # Text embeddings arguments
+    parser.add_argument(
+        "--embeddings_path",
+        type=str,
+        default=None,
+        help="Path to pre-computed text embeddings file (.pt). If provided, text encoder loading will be skipped.",
+    )
 
     args = parser.parse_args()
     logger.warning(f"Running generation with arguments: {args}")
     infer(**vars(args))
+
+
+def load_embeddings_from_file(embeddings_path: str, device: Optional[str] = None) -> dict:
+    """Load pre-computed text embeddings from a .pt file.
+    
+    Args:
+        embeddings_path: Path to the .pt file containing embeddings
+        device: Device to load embeddings to
+        
+    Returns:
+        Dictionary containing prompt_embeds, negative_prompt_embeds, and attention masks
+    """
+    if not os.path.exists(embeddings_path):
+        raise FileNotFoundError(f"Embeddings file not found: {embeddings_path}")
+    
+    embeddings_data = torch.load(embeddings_path, map_location=device or "cpu")
+    
+    # Extract embeddings and attention masks
+    result = {
+        "prompt_embeds": embeddings_data.get("prompt_embeds"),
+        "negative_prompt_embeds": embeddings_data.get("negative_prompt_embeds"),
+        "prompt_attention_mask": embeddings_data.get("prompt_attention_mask"),
+        "negative_prompt_attention_mask": embeddings_data.get("negative_prompt_attention_mask"),
+        "prompt": embeddings_data.get("prompt", ""),
+        "negative_prompt": embeddings_data.get("negative_prompt", ""),
+    }
+    
+    return result
 
 
 def create_ltx_video_pipeline(
@@ -307,6 +343,7 @@ def create_ltx_video_pipeline(
     enhance_prompt: bool = False,
     prompt_enhancer_image_caption_model_name_or_path: Optional[str] = None,
     prompt_enhancer_llm_model_name_or_path: Optional[str] = None,
+    skip_text_encoder: bool = False,
 ) -> LTXVideoPipeline:
     ckpt_path = Path(ckpt_path)
     assert os.path.exists(
@@ -330,17 +367,25 @@ def create_ltx_video_pipeline(
             sampler=("Uniform" if sampler.lower() == "uniform" else "LinearQuadratic")
         )
 
-    text_encoder = T5EncoderModel.from_pretrained(
-        text_encoder_model_name_or_path, subfolder="text_encoder"
-    )
+    # Only load text encoder if not skipping
+    if not skip_text_encoder:
+        text_encoder = T5EncoderModel.from_pretrained(
+            text_encoder_model_name_or_path, subfolder="text_encoder"
+        )
+        tokenizer = T5Tokenizer.from_pretrained(
+            text_encoder_model_name_or_path, subfolder="tokenizer"
+        )
+        text_encoder = text_encoder.to(device)
+        text_encoder = text_encoder.to(torch.bfloat16)
+    else:
+        text_encoder = None
+        tokenizer = None
+        logger.warning("Skipping text encoder loading. Pre-computed embeddings must be provided.")
+    
     patchifier = SymmetricPatchifier(patch_size=1)
-    tokenizer = T5Tokenizer.from_pretrained(
-        text_encoder_model_name_or_path, subfolder="tokenizer"
-    )
 
     transformer = transformer.to(device)
     vae = vae.to(device)
-    text_encoder = text_encoder.to(device)
 
     if enhance_prompt:
         prompt_enhancer_image_caption_model = AutoModelForCausalLM.from_pretrained(
@@ -365,7 +410,8 @@ def create_ltx_video_pipeline(
     vae = vae.to(torch.bfloat16)
     if precision == "bfloat16" and transformer.dtype != torch.bfloat16:
         transformer = transformer.to(torch.bfloat16)
-    text_encoder = text_encoder.to(torch.bfloat16)
+    if text_encoder is not None:
+        text_encoder = text_encoder.to(torch.bfloat16)
 
     # Use submodels for the pipeline
     submodel_dict = {
@@ -411,6 +457,7 @@ def infer(
     conditioning_strengths: Optional[List[float]] = None,
     conditioning_start_frames: Optional[List[int]] = None,
     device: Optional[str] = None,
+    embeddings_path: Optional[str] = None,
     **kwargs,
 ):
     # check if pipeline_config is a file
@@ -530,6 +577,20 @@ def infer(
     prompt_enhancer_llm_model_name_or_path = pipeline_config[
         "prompt_enhancer_llm_model_name_or_path"
     ]
+    
+    # Load pre-computed embeddings if provided
+    embeddings_data = None
+    skip_text_encoder = False
+    if embeddings_path:
+        logger.info(f"Loading pre-computed embeddings from {embeddings_path}")
+        embeddings_data = load_embeddings_from_file(embeddings_path, device=kwargs.get("device", get_device()))
+        skip_text_encoder = True
+        # Override prompts with those from embeddings file
+        if embeddings_data.get("prompt"):
+            prompt = embeddings_data["prompt"]
+            logger.info(f"Using prompt from embeddings: {prompt}")
+        if embeddings_data.get("negative_prompt"):
+            negative_prompt = embeddings_data["negative_prompt"]
 
     pipeline = create_ltx_video_pipeline(
         ckpt_path=ltxv_model_path,
@@ -540,6 +601,7 @@ def infer(
         enhance_prompt=enhance_prompt,
         prompt_enhancer_image_caption_model_name_or_path=prompt_enhancer_image_caption_model_name_or_path,
         prompt_enhancer_llm_model_name_or_path=prompt_enhancer_llm_model_name_or_path,
+        skip_text_encoder=skip_text_encoder,
     )
 
     if pipeline_config.get("pipeline_type", None) == "multi-scale":
@@ -597,6 +659,14 @@ def infer(
         "negative_prompt": negative_prompt,
         "negative_prompt_attention_mask": None,
     }
+    
+    # Add pre-computed embeddings if available
+    if embeddings_data:
+        sample["prompt_embeds"] = embeddings_data.get("prompt_embeds")
+        sample["negative_prompt_embeds"] = embeddings_data.get("negative_prompt_embeds")
+        sample["prompt_attention_mask"] = embeddings_data.get("prompt_attention_mask")
+        sample["negative_prompt_attention_mask"] = embeddings_data.get("negative_prompt_attention_mask")
+        logger.info("Using pre-computed embeddings for text encoding")
 
     device = device or get_device()
     generator = torch.Generator(device=device).manual_seed(seed)
